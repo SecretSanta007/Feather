@@ -6,11 +6,6 @@
     Feather is a free on-device iOS application manager/installer built with UIKit for quality.
 </p>
 
-#### README In Other Languages
-
-- [Deutsch🇩🇪](https://github.com/khcrysalis/Feather/blob/main/README_de.md)
-- [Русский🇷🇺](https://github.com/khcrysalis/Feather/blob/main/README_ru.md)
-
 ## Features
 
 - **Altstore repo support**. *Supporting Legacy and 2.0 repo structures*
@@ -55,6 +50,10 @@ It uses the [localhost.direct](https://github.com/Upinel/localhost.direct) certi
 Yes, to be able to install applications on device the server needs to be HTTPS. Which, we use a localhost.direct certificate for when turning on the server while attempting to install.
 
 We have an option to download a new certificate to make this server be able to run in the far future but no guarantees. It entirely depends on the owners of localhost.direct to be able to provide a certificate for use. If it does expire and theres a new one available, hopefully we'll be there to update the files in the background so Feather is able to retrieve those.
+
+> Notifications aren't working
+
+This is because of a default setting applied when using Feather, read below.
 
 > Why does Feather append a random string on the bundle ID?
 
@@ -109,7 +108,7 @@ make package SCHEME="'feather (Release)'" # Build
 - [Zsign](https://github.com/zhlynn/zsign) - Allowing to sign on-device, reimplimented to work on other platforms such as iOS.
 - [Nuke](https://github.com/kean/Nuke) - Image caching.
 - [Asspp](https://github.com/Lakr233/Asspp) - Some code for setting up the http server.
-- [plistserver](https://github.com/QuickSign-Team/plistserver) - Hosted on https://api.palera.in
+- [plistserver](https://github.com/nekohaxx/plistserver) - Hosted on https://api.palera.in
 
 ## Contributions
 

@@ -1,8 +1,10 @@
 name: Create Beta Build
 
 on:
-
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -21,15 +23,67 @@ jobs:
         run: | 
           sudo xcode-select -s /Applications/Xcode_15.1.app/Contents/Developer
           mkdir upload
+          sed -i '' '/func application(/a\
+          Preferences.beta = true
+          ' iOS/Delegates/AppDelegate.swift
 
       - name: Compile f
         run: | 
           make package SCHEME="'feather (Release)'"
           mv packages/* upload/
 
-      - name: Get Version Number
-        id: get_version
+
+
+
+
+      - name: Install pyupload
         run: |
-          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Payload/feather.app/Info.plist)
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          pip install pyupload
+
+      - name: Upload file to Catbox
+        id: upload_catbox
+        run: |
+          UPLOAD_OUTPUT=$(pyupload upload/feather.ipa --host=catbox)
+          echo "Upload Output: $UPLOAD_OUTPUT"
+          
+          LINK=$(echo "$UPLOAD_OUTPUT" | sed -n 's/.*Your link : //p')
+          echo "Uploaded file link: $LINK"
+          
+          echo "catbox_link=$LINK" >> $GITHUB_ENV
+
+      - name: Send Discord build message
+        run: |
+          COMMIT_HASH=$(git log -1 --pretty=format:'%h') &&
+          COMMIT_MESSAGE=$(git log -1 --pretty=format:'%s') &&
+          (
+          curl "${{ secrets.B_WEBHOOK }}" -sS -H "Content-Type:application/json" -X POST -d '{
+            "content":null,
+            "embeds":[
+              {
+                "title":"${{ github.repository }} [Build ${{ github.run_number }}]",
+                "description":"[`'"$COMMIT_HASH"'`](https://github.com/${{ github.repository }}/commit/'"$COMMIT_HASH"') '"$COMMIT_MESSAGE"'",
+                "url":"https://github.com/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID}",
+                "color":6648790,
+                "author":{
+                  "name":"${{ github.actor }}",
+                  "icon_url":"https://github.com/${{ github.actor }}.png"
+                }
+              }
+            ],
+            "attachments":[],
+            "components":[
+              {
+                "type":1,
+                "components":[
+                  {
+                    "type":2,
+                    "url":"${{ env.catbox_link }}",
+                    "label":"Download",
+                    "style":5
+                  }
+                ]
+              }
+            ]
+          }' || true
+          )
 

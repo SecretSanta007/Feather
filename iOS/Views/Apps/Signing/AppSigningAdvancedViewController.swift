@@ -24,16 +24,6 @@ class AppSigningAdvancedViewController: UITableViewController {
 		fatalError("init(coder:) has not been implemented")
 	}
 	
-	override func viewWillAppear(_ animated: Bool) {
-		super.viewWillAppear(animated)
-		navigationController?.setToolbarHidden(true, animated: animated)
-	}
-	
-	override func viewWillDisappear(_ animated: Bool) {
-		super.viewWillDisappear(animated)
-		navigationController?.setToolbarHidden(false, animated: animated)
-	}
-	
 	override func viewDidLoad() {
 		title = String.localized("APP_SIGNING_VIEW_CONTROLLER_CELL_ADVANCED")
 		navigationItem.largeTitleDisplayMode = .never
@@ -105,32 +95,50 @@ class AppSigningAdvancedViewController: UITableViewController {
 		forceForceFullScreen.selectionStyle = .none
 		cellsForSection2.append(forceForceFullScreen)
 		
+		let forceLocalize = SwitchViewCell()
+		forceLocalize.textLabel?.text = "Force Localize"
+		forceLocalize.switchControl.addTarget(self, action: #selector(forceLocalized(_:)), for: .valueChanged)
+		forceLocalize.switchControl.isOn = appSigningViewController.forceTryToLocalize
+		forceLocalize.selectionStyle = .none
+		cellsForSection2.append(forceLocalize)
+		
 		let removeWatchPlaceHolder = SwitchViewCell()
 		removeWatchPlaceHolder.textLabel?.text = String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_REMOVE_DELETE_PLACEHOLDER_WATCH_APP")
-		removeWatchPlaceHolder.switchControl.addTarget(self, action: #selector(forceForceFullScreenToggled(_:)), for: .valueChanged)
+		removeWatchPlaceHolder.switchControl.addTarget(self, action: #selector(removePlaceHolderWatchExtension(_:)), for: .valueChanged)
 		removeWatchPlaceHolder.switchControl.isOn = appSigningViewController.removeWatchPlaceHolder
 		removeWatchPlaceHolder.selectionStyle = .none
 		cellsForSection2.append(removeWatchPlaceHolder)
 		
-//		let removeProvisioningFile = SwitchViewCell()
-//		removeProvisioningFile.textLabel?.text = "Remove Provisioning File"
-//		removeProvisioningFile.switchControl.addTarget(self, action: #selector(removeProvisioningFile(_:)), for: .valueChanged)
-//		removeProvisioningFile.switchControl.isOn = appSigningViewController.removeProvisioningFile
-//		removeProvisioningFile.selectionStyle = .none
-//		cellsForSection2.append(removeProvisioningFile)
+		let removeProvisioningFile = SwitchViewCell()
+		removeProvisioningFile.textLabel?.text = "Include Provisioning File"
+		removeProvisioningFile.switchControl.addTarget(self, action: #selector(removeProvisioningFile(_:)), for: .valueChanged)
+		removeProvisioningFile.switchControl.isOn = appSigningViewController.removeProvisioningFile
+		removeProvisioningFile.selectionStyle = .none
+		cellsForSection2.append(removeProvisioningFile)
 	}
 	
 	override func numberOfSections(in tableView: UITableView) -> Int {
 		return 3
 	}
 	
-	override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-		switch section {
-		case 0: return String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_APPEARENCE")
-		case 1: return String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_MINIMUM_APP_VERSION")
-		case 2: return String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_PROPERTIES")
-		default: return nil
-		}
+	override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+		
+		let titles = [
+			String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_APPEARENCE"),
+			String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_MINIMUM_APP_VERSION"),
+			String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_PROPERTIES")
+		][section]
+		
+		let headerView = InsetGroupedSectionHeader(title: titles)
+		return headerView
+	}
+	
+	override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+		return [
+			40,
+			40,
+			40
+		][section]
 	}
 	
 	override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -182,5 +190,8 @@ class AppSigningAdvancedViewController: UITableViewController {
 	}
 	@objc private func removeProvisioningFile(_ sender: UISwitch) {
 		appSigningViewController.removeProvisioningFile = sender.isOn
+	}
+	@objc private func forceLocalized(_ sender: UISwitch) {
+		appSigningViewController.forceTryToLocalize = sender.isOn
 	}
 }
