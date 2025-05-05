@@ -38,7 +38,8 @@ extension CoreDataManager {
 		appPath: String?,
 		timeToLive: Date,
 		teamName: String,
-		completion: @escaping (Error?) -> Void) {
+		originalSourceURL: URL?,
+		completion: @escaping (Result<SignedApps, Error>) -> Void) {
 			let context = context ?? self.context
 			let newApp = SignedApps(context: context)
 			
@@ -51,12 +52,15 @@ extension CoreDataManager {
 			newApp.appPath = appPath
 			newApp.timeToLive = timeToLive
 			newApp.teamName = teamName
+			newApp.originalSourceURL = originalSourceURL
 
 			do {
 				try context.save()
 				NotificationCenter.default.post(name: Notification.Name("lfetch"), object: nil)
+				completion(.success(newApp)) // one exception for this single function out of all of them 
 			} catch {
 				Debug.shared.log(message: "Error saving data: \(error)", type: .error)
+				completion(.failure(error))
 			}
 	}
 	
@@ -104,5 +108,17 @@ extension CoreDataManager {
 			completion(error)
 		}
 	}
+    
+    func setUpdateAvailable(for app: SignedApps, newVersion: String) {
+        app.hasUpdate = true
+        app.updateVersion = newVersion
+        saveContext()
+    }
+
+    func clearUpdateState(for app: SignedApps) {
+        app.hasUpdate = false
+        app.updateVersion = nil
+        saveContext()
+    }
 	
 }

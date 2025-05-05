@@ -8,63 +8,45 @@
 
 import UIKit
 
-class DisplayViewController: UITableViewController {
-
-	let tableData = [
-		[String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_APPEARENCE")],
-		["Collection View"],
-		[],
-		["Certificate Name"]
-	]
-	
-	var sectionTitles = [
-		"",
-		String.localized("DISPLAY_VIEW_CONTROLLER_SECTION_TITLE_TINT_COLOR"),
-		"Store",
-		"Certificates"
-	]
+class DisplayViewController: FRSTableViewController {
 
 	let collectionData = ["Default", "Berry", "Mint", "Dr Pepper", "Cool Blue", "Fuchsia", "Purplish"]
 	let collectionDataColors = ["848ef9", "ff7a83", "a6e3a1", "711f25", "4161F1", "FF00FF", "D7B4F3"]
 	
-	init() { super.init(style: .insetGrouped) }
-	
-	required init?(coder: NSCoder) {
-		fatalError("init(coder:) has not been implemented")
-	}
-	
 	override func viewDidLoad() {
 		super.viewDidLoad()
 		title = String.localized("SETTINGS_VIEW_CONTROLLER_CELL_DISPLAY")
-		self.navigationItem.largeTitleDisplayMode = .never
-		self.tableView.delegate = self
-		self.tableView.dataSource = self
+		
+		tableData = [
+			[String.localized("APP_SIGNING_INPUT_VIEW_CONTROLLER_SECTION_TITLE_APPEARENCE")],
+			["Collection View"],
+			[],
+			["Certificate Name"]
+		]
+		
+		sectionTitles = [
+			"",
+			String.localized("DISPLAY_VIEW_CONTROLLER_SECTION_TITLE_TINT_COLOR"),
+			String.localized("DISPLAY_VIEW_CONTROLLER_SECTION_TITLE_STORE"),
+			String.localized("CERTIFICATES_VIEW_CONTROLLER_TITLE")
+		]
+		
 		self.tableView.register(CollectionTableViewCell.self, forCellReuseIdentifier: "CollectionCell")
 	}
 	
-	func updateAppearance(with style: UIUserInterfaceStyle) {
+	private func updateAppearance(with style: UIUserInterfaceStyle) {
 		view.window?.overrideUserInterfaceStyle = style
 		Preferences.preferredInterfaceStyle = style.rawValue
 	}
 }
 
 extension DisplayViewController {
-	override func numberOfSections(in tableView: UITableView) -> Int { return sectionTitles.count }
-	override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { return sectionTitles[section] }
-	override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat { return sectionTitles[section].isEmpty ? 5 : 40 }
-	
 	override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
 		if section == 2 {
 			return 3
 		} else {
 			return tableData[section].count
 		}
-	}
-	
-	override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-		let title = sectionTitles[section]
-		let headerView = InsetGroupedSectionHeader(title: title)
-		return headerView
 	}
 	
 	override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -116,7 +98,7 @@ extension DisplayViewController {
 			return cell
 		case "Certificate Name":
 			let useTeamName = SwitchViewCell()
-			useTeamName.textLabel?.text = "Use Team Name"
+			useTeamName.textLabel?.text = String.localized("DISPLAY_VIEW_CONTROLLER_CELL_TEAM_NAME")
 			useTeamName.switchControl.addTarget(self, action: #selector(certificateNameToggle(_:)), for: .valueChanged)
 			useTeamName.switchControl.isOn = Preferences.certificateTitleAppIDtoTeamID
 			useTeamName.selectionStyle = .none
@@ -141,7 +123,7 @@ extension DisplayViewController {
 	override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
 		switch section {
 		case 3:
-			return "Replaces the certificate name with your team name, could be for better to distinguish between certificates if providers happen to always use the same App ID name."
+			return String.localized("DISPLAY_VIEW_CONTROLLER_CELL_TEAM_NAME_DESCRIPTION")
 		default:
 			return nil
 		}

@@ -44,15 +44,176 @@ class LibraryViewController: UITableViewController {
 		self.tableView.delegate = self
 		tableView.register(AppsTableViewCell.self, forCellReuseIdentifier: "RoundedBackgroundCell")
 		NotificationCenter.default.addObserver(self, selector: #selector(afetch), name: Notification.Name("lfetch"), object: nil)
+		NotificationCenter.default.addObserver(
+			self,
+			selector: #selector(handleInstallNotification(_:)),
+			name: Notification.Name("InstallDownloadedApp"),
+			object: nil
+		)
+	}
+	
+	@objc private func handleInstallNotification(_ notification: Notification) {
+		guard let downloadedApp = notification.userInfo?["downloadedApp"] as? DownloadedApps else { return }
 		
+		let signingDataWrapper = SigningDataWrapper(signingOptions: UserDefaults.standard.signingOptions)
+		signingDataWrapper.signingOptions.installAfterSigned = true
+		
+		let ap = SigningsViewController(
+			signingDataWrapper: signingDataWrapper,
+			application: downloadedApp,
+			appsViewController: self
+		)
+		
+		ap.signingCompletionHandler = { success in
+			if success {
+				Debug.shared.log(message: "Signing completed successfully", type: .success)
+			}
+		}
+		
+		let navigationController = UINavigationController(rootViewController: ap)
+		navigationController.shouldPresentFullScreen()
+		
+		present(navigationController, animated: true)
 	}
 	
 	deinit {
 		NotificationCenter.default.removeObserver(self, name: Notification.Name("lfetch"), object: nil)
+		NotificationCenter.default.removeObserver(self, name: Notification.Name("InstallDownloadedApp"), object: nil)
 	}
 	
 	fileprivate func setupNavigation() {
 		self.navigationController?.navigationBar.prefersLargeTitles = true
+		self.title = String.localized("TAB_LIBRARY")
+	}
+	
+	private func handleAppUpdate(for signedApp: SignedApps) {
+        guard let sourceURL = signedApp.originalSourceURL else {
+			Debug.shared.log(message: "Missing update version or source URL", type: .error)
+			return
+		}
+		
+		Debug.shared.log(message: "Fetching update from source: \(sourceURL.absoluteString)", type: .info)
+		
+		present(loaderAlert!, animated: true)
+		
+		#if DEBUG
+			let mockSource = SourceRefreshOperation()
+			mockSource.createMockSource { mockSourceData in
+				if let sourceData = mockSourceData {
+					self.handleSourceData(sourceData, for: signedApp)
+				} else {
+					Debug.shared.log(message: "Failed to create mock source", type: .error)
+					DispatchQueue.main.async {
+						self.loaderAlert?.dismiss(animated: true)
+					}
+				}
+			}
+		#else
+			SourceGET().downloadURL(from: sourceURL) { [weak self] result in
+				guard let self = self else { return }
+				
+				switch result {
+				case .success((let data, _)):
+					if case .success(let sourceData) = SourceGET().parse(data: data) {
+						self.handleSourceData(sourceData, for: signedApp)
+					} else {
+						Debug.shared.log(message: "Failed to parse source data", type: .error)
+						DispatchQueue.main.async {
+							self.loaderAlert?.dismiss(animated: true)
+						}
+					}
+				case .failure(let error):
+					Debug.shared.log(message: "Failed to fetch source: \(error)", type: .error)
+					DispatchQueue.main.async {
+						self.loaderAlert?.dismiss(animated: true)
+					}
+				}
+			}
+		#endif
+	}
+	
+	private func handleSourceData(_ sourceData: SourcesData, for signedApp: SignedApps) {
+		guard let bundleId = signedApp.bundleidentifier,
+			  let updateVersion = signedApp.updateVersion,
+			  let app = sourceData.apps.first(where: { $0.bundleIdentifier == bundleId }),
+			  let versions = app.versions else {
+			Debug.shared.log(message: "Failed to find app in source", type: .error)
+			DispatchQueue.main.async {
+				self.loaderAlert?.dismiss(animated: true)
+			}
+			return
+		}
+		
+		// Look for the version that matches our update version
+		for version in versions {
+			if version.version == updateVersion {
+				// Found the matching version
+				Debug.shared.log(message: "Found matching version: \(version.version)", type: .info)
+				
+				let uuid = UUID().uuidString
+				
+				DispatchQueue.global(qos: .background).async {
+					do {
+						let tempDirectory = FileManager.default.temporaryDirectory
+						let destinationURL = tempDirectory.appendingPathComponent("\(uuid).ipa")
+						
+						// Download the file
+						if let data = try? Data(contentsOf: version.downloadURL) {
+							try data.write(to: destinationURL)
+							
+							let dl = AppDownload()
+							try handleIPAFile(destinationURL: destinationURL, uuid: uuid, dl: dl)
+							
+							DispatchQueue.main.async {
+								self.loaderAlert?.dismiss(animated: true) {
+									// Force Sign & Install
+									let downloadedApps = CoreDataManager.shared.getDatedDownloadedApps()
+									if let downloadedApp = downloadedApps.first(where: { $0.uuid == uuid }) {
+										let signingDataWrapper = SigningDataWrapper(signingOptions: UserDefaults.standard.signingOptions)
+										signingDataWrapper.signingOptions.installAfterSigned = true
+										
+										// Store the original signed app for deletion after update
+										let originalSignedApp = signedApp
+										
+										let ap = SigningsViewController(
+											signingDataWrapper: signingDataWrapper,
+											application: downloadedApp,
+											appsViewController: self
+										)
+										
+										// Add completion handler to delete the original app after successful signing
+										ap.signingCompletionHandler = { [weak self] success in
+											if success {
+												CoreDataManager.shared.deleteAllSignedAppContent(for: originalSignedApp)
+												self?.fetchSources()
+												self?.tableView.reloadData()
+											}
+										}
+										
+										let navigationController = UINavigationController(rootViewController: ap)
+										
+										navigationController.shouldPresentFullScreen()
+										
+										self.present(navigationController, animated: true)
+									}
+								}
+							}
+						}
+					} catch {
+						Debug.shared.log(message: "Failed to handle update: \(error)", type: .error)
+						DispatchQueue.main.async {
+							self.loaderAlert?.dismiss(animated: true)
+						}
+					}
+				}
+				return
+			}
+		}
+		
+		Debug.shared.log(message: "Could not find version \(updateVersion) in source", type: .error)
+		DispatchQueue.main.async {
+			self.loaderAlert?.dismiss(animated: true)
+		}
 	}
 }
 
@@ -72,12 +233,21 @@ extension LibraryViewController {
 	override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
 		switch section {
 		case 0:
-			let headerWithButton = GroupedSectionHeader(title: "Signed Apps", subtitle: "\(signedApps?.count ?? 0) Signed", buttonTitle: "Import", buttonAction: {
-				self.beginImportFile()
+			let headerWithButton = GroupedSectionHeader(
+                title: String.localized("LIBRARY_VIEW_CONTROLLER_SECTION_TITLE_SIGNED_APPS"),
+				subtitle: String.localized("LIBRARY_VIEW_CONTROLLER_SECTION_TITLE_SIGNED_APPS_TOTAL", arguments: String(signedApps?.count ?? 0)),
+                buttonTitle: String.localized("LIBRARY_VIEW_CONTROLLER_SECTION_BUTTON_IMPORT"),
+                buttonAction: {
+				self.startImporting()
 			})
 			return headerWithButton
 		case 1:
-			let headerWithButton = GroupedSectionHeader(title: "Downloaded Apps")
+			
+			let headerWithButton = GroupedSectionHeader(
+				title: String.localized("LIBRARY_VIEW_CONTROLLER_SECTION_DOWNLOADED_APPS"),
+				subtitle: String.localized("LIBRARY_VIEW_CONTROLLER_SECTION_TITLE_DOWNLOADED_APPS_TOTAL", arguments: String(downloadedApps?.count ?? 0))
+			)
+			
 			return headerWithButton
 		default:
 			return nil
@@ -113,68 +283,123 @@ extension LibraryViewController {
 		let source = getApplication(row: indexPath.row, section: indexPath.section)
 		let filePath = getApplicationFilePath(with: source!, row: indexPath.row, section: indexPath.section, getuuidonly: true)
 		let filePath2 = getApplicationFilePath(with: source!, row: indexPath.row, section: indexPath.section, getuuidonly: false)
-		
+		let appName = "\((source!.value(forKey: "name") as? String ?? ""))"
 		switch indexPath.section {
 		case 0:
 			if FileManager.default.fileExists(atPath: filePath2!.path) {
 				popupVC = PopupViewController()
 				popupVC.modalPresentationStyle = .pageSheet
 				
-				let button1 = PopupViewControllerButton(title: "Install \((source!.value(forKey: "name") as? String ?? ""))", color: .tintColor.withAlphaComponent(0.9))
-				button1.onTap = { [weak self] in
-					guard let self = self else { return }
-					self.popupVC.dismiss(animated: true)
-					self.startInstallProcess(meow: source!, filePath: filePath?.path ?? "")
-				}
+				let hasUpdate = (source as? SignedApps)?.value(forKey: "hasUpdate") as? Bool ?? false
 				
-				let button4 = PopupViewControllerButton(title: "Open \((source!.value(forKey: "name") as? String ?? ""))", color: .quaternarySystemFill, titleColor: .tintColor)
-				button4.onTap = { [weak self] in
-					guard let self = self else { return }
-					self.popupVC.dismiss(animated: true)
-					if let workspace = LSApplicationWorkspace.default() {
-						let success = workspace.openApplication(withBundleID: "\((source!.value(forKey: "bundleidentifier") as? String ?? ""))")
-						if !success {
-							Debug.shared.log(message: "Unable to open, do you have the app installed?", type: .warning)
+				if let signedApp = source as? SignedApps,
+				   hasUpdate {
+					// Update available menu
+					let updateButton = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_UPDATE", arguments: appName),
+						color: .tintColor.withAlphaComponent(0.9),
+						titleColor: .white
+					)
+					updateButton.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true) {
+							self.handleAppUpdate(for: signedApp)
 						}
 					}
-
-				}
-				
-				let button3 = PopupViewControllerButton(title: "Resign \((source!.value(forKey: "name") as? String ?? ""))", color: .quaternarySystemFill, titleColor: .tintColor)
-				button3.onTap = { [weak self] in
-					guard let self = self else { return }
-					self.popupVC.dismiss(animated: true) {
-						self.present(self.loaderAlert!, animated: true)
-						let cert = CoreDataManager.shared.getCurrentCertificate()!
-						
-						resignApp(certificate: cert, appPath: filePath2!) { success in
-							if success {
-								CoreDataManager.shared.updateSignedApp(app: source as! SignedApps, newTimeToLive: (cert.certData?.expirationDate)!, newTeamName: (cert.certData?.name)!) { _ in
-									DispatchQueue.main.async {
-										self.loaderAlert?.dismiss(animated: true)
-										Debug.shared.log(message: "Done action??")
-										self.tableView.reloadRows(at: [indexPath], with: .left)
-									}
-								}
+					
+					let clearButton = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_CLEAR_UPDATE"),
+						color: .quaternarySystemFill,
+						titleColor: .tintColor
+					)
+					clearButton.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true)
+						CoreDataManager.shared.clearUpdateState(for: signedApp)
+						self.tableView.reloadRows(at: [indexPath], with: .none)
+					}
+					
+					popupVC.configureButtons([updateButton, clearButton])
+				} else {
+					// Regular menu
+					let button1 = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_INSTALL", arguments: appName),
+						color: .tintColor.withAlphaComponent(0.9)
+					)
+					button1.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true)
+						self.startInstallProcess(meow: source!, filePath: filePath?.path ?? "")
+					}
+					
+					let button4 = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_OPEN", arguments: appName),
+						color: .quaternarySystemFill,
+						titleColor: .tintColor
+					)
+					button4.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true)
+						if let workspace = LSApplicationWorkspace.default() {
+							let success = workspace.openApplication(withBundleID: "\((source!.value(forKey: "bundleidentifier") as? String ?? ""))")
+							if !success {
+								Debug.shared.log(message: "Unable to open, do you have the app installed?", type: .warning)
 							}
 						}
 					}
+					
+					let button3 = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_RESIGN", arguments: appName),
+						color: .quaternarySystemFill,
+						titleColor: .tintColor
+					)
+					button3.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true) {
+							if let cert = CoreDataManager.shared.getCurrentCertificate() {
+								self.present(self.loaderAlert!, animated: true)
+								
+								resignApp(certificate: cert, appPath: filePath2!) { success in
+									if success {
+										CoreDataManager.shared.updateSignedApp(app: source as! SignedApps, newTimeToLive: (cert.certData?.expirationDate)!, newTeamName: (cert.certData?.name)!) { _ in
+											DispatchQueue.main.async {
+												self.loaderAlert?.dismiss(animated: true)
+												Debug.shared.log(message: "Done action??")
+												self.tableView.reloadRows(at: [indexPath], with: .left)
+											}
+										}
+									}
+								}
+							} else {
+								let alert = UIAlertController(
+									title: String.localized("APP_SIGNING_VIEW_CONTROLLER_NO_CERTS_ALERT_TITLE"),
+									message: String.localized("APP_SIGNING_VIEW_CONTROLLER_NO_CERTS_ALERT_DESCRIPTION"),
+									preferredStyle: .alert
+								)
+								alert.addAction(UIAlertAction(title: String.localized("LAME"), style: .default))
+								self.present(alert, animated: true)
+							}
+						}
+					}
+					
+					let button2 = PopupViewControllerButton(
+						title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_SHARE", arguments: appName),
+						color: .quaternarySystemFill,
+						titleColor: .tintColor
+					)
+					button2.onTap = { [weak self] in
+						guard let self = self else { return }
+						self.popupVC.dismiss(animated: true)
+						self.shareFile(meow: source!, filePath: filePath?.path ?? "")
+					}
+					
+					popupVC.configureButtons([button1, button4, button3, button2])
 				}
-				
-				let button2 = PopupViewControllerButton(title: "Share \((source!.value(forKey: "name") as? String ?? ""))", color: .quaternarySystemFill, titleColor: .tintColor)
-				button2.onTap = { [weak self] in
-					guard let self = self else { return }
-					self.popupVC.dismiss(animated: true)
-					self.shareFile(meow: source!, filePath: filePath?.path ?? "")
-				}
-				popupVC.configureButtons([button1, button4, button3, button2])
-				
-				let detent2: UISheetPresentationController.Detent = ._detent(withIdentifier: "Test2", constant: 270.0)
+				let detent2: UISheetPresentationController.Detent = ._detent(withIdentifier: "Test2", constant: hasUpdate ? 150.0 : 270.0)
 				if let presentationController = popupVC.presentationController as? UISheetPresentationController {
 					presentationController.detents = [
 						detent2,
-						.medium(),
-						
+						.medium()
 					]
 					presentationController.prefersGrabberVisible = true
 				}
@@ -188,30 +413,34 @@ extension LibraryViewController {
 				popupVC = PopupViewController()
 				popupVC.modalPresentationStyle = .pageSheet
 				
-				let button1 = PopupViewControllerButton(title: "Sign \((source!.value(forKey: "name") as? String ?? ""))", color: .tintColor.withAlphaComponent(0.9))
+				let singingData = SigningDataWrapper(signingOptions: UserDefaults.standard.signingOptions)
+				let button1 = PopupViewControllerButton(
+					title: singingData.signingOptions.installAfterSigned
+                    ? String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_SIGN_INSTALL", arguments: appName)
+                    : String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_SIGN", arguments: appName),
+					color: .tintColor.withAlphaComponent(0.9))
 				button1.onTap = { [weak self] in
 					guard let self = self else { return }
 					self.popupVC.dismiss(animated: true)
 					self.startSigning(meow: source!)
 				}
 				
-				let button2 = PopupViewControllerButton(title: "Install \((source!.value(forKey: "name") as? String ?? ""))", color: .quaternarySystemFill, titleColor: .tintColor)
+				let button2 = PopupViewControllerButton(title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_INSTALL", arguments: appName), color: .quaternarySystemFill, titleColor: .tintColor)
 				button2.onTap = { [weak self] in
 					guard let self = self else { return }
 					self.popupVC.dismiss(animated: true) {
 						let alertController = UIAlertController(
-							title: "Confirm Installation",
-							message: "Trying to install via the downloaded apps tab may not work as they are most likely not signed! It's recommended you sign that application first before installing.",
+                            title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_INSTALL_CONFIRM"),
+                            message: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_INSTALL_CONFIRM_DESCRIPTION"),
 							preferredStyle: .alert
 						)
 						
-						let confirmAction = UIAlertAction(title: "Install", style: .default) { _ in
-							
+                        let confirmAction = UIAlertAction(title: String.localized("INSTALL"), style: .default) { _ in
 							self.startInstallProcess(meow: source!, filePath: filePath?.path ?? "")
 							
 						}
 						
-						let cancelAction = UIAlertAction(title: "Cancel", style: .cancel, handler: nil)
+                        let cancelAction = UIAlertAction(title: String.localized("CANCEL"), style: .cancel, handler: nil)
 						
 						alertController.addAction(confirmAction)
 						alertController.addAction(cancelAction)
@@ -245,9 +474,10 @@ extension LibraryViewController {
 	
 	@objc func startSigning(meow: NSManagedObject) {
 		if FileManager.default.fileExists(atPath: CoreDataManager.shared.getFilesForDownloadedApps(for:(meow as! DownloadedApps)).path) {
-			let ap = AppSigningViewController(app: meow, appsViewController: self)
+			let signingDataWrapper = SigningDataWrapper(signingOptions: UserDefaults.standard.signingOptions)
+			let ap = SigningsViewController(signingDataWrapper: signingDataWrapper, application: meow, appsViewController: self)
 			let navigationController = UINavigationController(rootViewController: ap)
-			navigationController.modalPresentationStyle = .fullScreen
+			navigationController.shouldPresentFullScreen()
 			DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
 				self.present(navigationController, animated: true, completion: nil)
 			}
@@ -257,19 +487,28 @@ extension LibraryViewController {
 	override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
 		let source = getApplication(row: indexPath.row, section: indexPath.section)
 		
-		let deleteAction = UIContextualAction(style: .destructive, title: "Delete") { (action, view, completionHandler) in
+		let deleteAction = UIContextualAction(style: .destructive, title: String.localized("DELETE")) { (action, view, completionHandler) in
 			switch indexPath.section {
 			case 0:
+				if self.isFiltering {
+					self.filteredSignedApps.remove(at: indexPath.row)
+				} else {
+					self.signedApps?.remove(at: indexPath.row)
+				}
 				CoreDataManager.shared.deleteAllSignedAppContent(for: source! as! SignedApps)
-				self.signedApps?.remove(at: indexPath.row)
-				self.tableView.reloadSections(IndexSet(integer: 0), with: .automatic)
 			case 1:
+				if self.isFiltering {
+					self.filteredDownloadedApps.remove(at: indexPath.row)
+				} else {
+					self.downloadedApps?.remove(at: indexPath.row)
+				}
 				CoreDataManager.shared.deleteAllDownloadedAppContent(for: source! as! DownloadedApps)
-				self.downloadedApps?.remove(at: indexPath.row)
-				self.tableView.reloadSections(IndexSet(integer: 1), with: .automatic)
 			default:
 				break
 			}
+			
+			self.fetchSources()
+			
 			completionHandler(true)
 		}
 		
@@ -286,7 +525,7 @@ extension LibraryViewController {
 		
 		let configuration = UIContextMenuConfiguration(identifier: nil, actionProvider: { _ in
 			return UIMenu(title: "", image: nil, identifier: nil, options: [], children: [
-				UIAction(title: "View Details", image: UIImage(systemName: "info.circle"), handler: {_ in
+				UIAction(title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_VIEW_DATEILS"), image: UIImage(systemName: "info.circle"), handler: {_ in
 										
 					let viewController = AppsInformationViewController()
 					viewController.source = source
@@ -304,7 +543,7 @@ extension LibraryViewController {
 
 				}),
 				
-				UIAction(title: "Open in Files", image: UIImage(systemName: "folder"), handler: {_ in
+				UIAction(title: String.localized("LIBRARY_VIEW_CONTROLLER_SIGN_ACTION_OPEN_LN_FILES"), image: UIImage(systemName: "folder"), handler: {_ in
 					
 					let path = filePath?.deletingLastPathComponent()
 					let path2 = path?.absoluteString.replacingOccurrences(of: "file://", with: "shareddocuments://")
@@ -413,7 +652,7 @@ extension LibraryViewController: UISearchControllerDelegate, UISearchBarDelegate
 		searchController.hidesNavigationBarDuringPresentation = true
 		searchController.searchResultsUpdater = self
 		searchController.delegate = self
-		searchController.searchBar.placeholder = "Search Library"
+        searchController.searchBar.placeholder = String.localized("SETTINGS_VIEW_CONTROLLER_SEARCH_PLACEHOLDER")
 		navigationItem.searchController = searchController
 		definesPresentationContext = true
 		navigationItem.hidesSearchBarWhenScrolling = false

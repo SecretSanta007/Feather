@@ -15,58 +15,76 @@ import SystemConfiguration.CaptiveNetwork
 
 func getLocalIPAddress() -> String? {
 	var address: String?
-	
 	var ifaddr: UnsafeMutablePointer<ifaddrs>?
-	guard getifaddrs(&ifaddr) == 0 else { return nil }
 	
-	var ptr = ifaddr
-	while ptr != nil {
-		defer { ptr = ptr?.pointee.ifa_next }
-		
-		guard let interface = ptr?.pointee,
-			  let name = String(cString: interface.ifa_name, encoding: .ascii),
-			  name == "en0", // Wi-Fi interface
-			  let addr = interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) ? interface.ifa_addr : nil else {
-			continue
+	if getifaddrs(&ifaddr) == 0 {
+		var ptr = ifaddr
+		while ptr != nil {
+			let interface = ptr!.pointee
+			let addrFamily = interface.ifa_addr.pointee.sa_family
+			
+			if addrFamily == UInt8(AF_INET) {
+				
+				let name = String(cString: interface.ifa_name)
+				if name == "en0" || name == "pdp_ip0" {
+					
+					var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+					if getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+								   &hostname, socklen_t(hostname.count),
+								   nil, socklen_t(0), NI_NUMERICHOST) == 0 {
+						switch name {
+						    	case "pdp_ip0":
+						        	address = String("127.0.0.1")
+						    	default:
+						        	address = String(cString: hostname)
+						}
+						Debug.shared.log(message: "Testing (\(name)): \(address!)")
+					}
+					
+				}
+			}
+			ptr = ptr!.pointee.ifa_next
 		}
-		
-		var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-		if getnameinfo(addr, socklen_t(interface.ifa_addr.pointee.sa_len),
-					   &hostname, socklen_t(hostname.count),
-					   nil, 0, NI_NUMERICHOST) == 0 {
-			address = String(cString: hostname)
-		}
+		freeifaddrs(ifaddr)
 	}
 	
-	freeifaddrs(ifaddr)
 	return address
 }
 
 
 extension Installer {
-	static let sni = Preferences.userSelectedServer ? (getLocalIPAddress() ?? "127.0.0.1") : "app.localhost.direct"
+	static let commonName = getDocumentsDirectory().appendingPathComponent("commonName.txt")
 	
-	static let bundleKeyURL = Bundle.main.url(forResource: "localhost.direct", withExtension: "pem")
-	static let bundleCrtURL = Bundle.main.url(forResource: "localhost.direct", withExtension: "crt")
+	static let sni: String = {
+		if Preferences.userSelectedServer {
+			return getLocalIPAddress() ?? "0.0.0.0"
+		} else {
+			return readCommonName() ?? "0.0.0.0"
+		}
+	}()
 	
-	static let documentsKeyURL = getDocumentsDirectory().appendingPathComponent("localhost.direct.pem")
-	static let documentsCrtURL = getDocumentsDirectory().appendingPathComponent("localhost.direct.crt")
+	static let documentsKeyURL = getDocumentsDirectory().appendingPathComponent("server.pem")
+	static let documentsCrtURL = getDocumentsDirectory().appendingPathComponent("server.crt")
 
 	static func setupTLS() throws -> TLSConfiguration {
-		let keyURL = FileManager.default.fileExists(atPath: documentsKeyURL.path) ? documentsKeyURL : bundleKeyURL
-		let crtURL = FileManager.default.fileExists(atPath: documentsCrtURL.path) ? documentsCrtURL : bundleCrtURL
-		
-		guard let crtURL, let keyURL else {
-			throw NSError(domain: "Installer", code: 0, userInfo: [
-				NSLocalizedDescriptionKey: "Failed to load SSL certificates",
-			])
-		}
+		let keyURL = documentsKeyURL
+		let crtURL = documentsCrtURL
 		
 		return try TLSConfiguration.makeServerConfiguration(
 			certificateChain: NIOSSLCertificate
 				.fromPEMFile(crtURL.path)
 				.map { NIOSSLCertificateSource.certificate($0) },
-			privateKey: .file(keyURL.path)
-		)
+            privateKey: .privateKey(try NIOSSLPrivateKey(file: keyURL.path, format: .pem)))
+	}
+}
+
+extension Installer {
+	static func readCommonName() -> String? {
+		do {
+			return try String(contentsOf: commonName, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+		} catch {
+			Debug.shared.log(message: "Error reading commonName file: \(error.localizedDescription)")
+			return nil
+		}
 	}
 }

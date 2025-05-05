@@ -82,8 +82,10 @@ class Installer: Identifiable, ObservableObject {
 		}
 		
 		app.get("i") { req -> Response in
-
-			let testurl = "itms-services://?action=download-manifest&url=" + ("\(Preferences.onlinePath ?? Preferences.defaultInstallPath)/genPlist?bundleid=\(metadata.id)&name=\(metadata.name)&version=\(metadata.name)&fetchurl=\(self.payloadEndpoint.absoluteString)").addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+			let baseUrl = "\(Preferences.onlinePath ?? Preferences.defaultInstallPath)/genPlist?bundleid=\(metadata.id)&name=\(metadata.name)&version=\(metadata.name)&fetchurl=\(self.payloadEndpoint.absoluteString)"
+			let encodedBaseUrl = baseUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+			let finalEncodedUrl = encodedBaseUrl.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+			let testurl = "itms-services://?action=download-manifest&url=" + finalEncodedUrl
 
 			var html = ""
 			
@@ -97,7 +99,6 @@ class Installer: Identifiable, ObservableObject {
 			
 			return Response(status: .ok, headers: headers, body: .init(string: html))
 		}
-
 
 		try app.server.start()
 		needsShutdown = true
@@ -135,7 +136,7 @@ extension Installer {
 			app.http.server.configuration.tlsConfiguration = try Self.setupTLS()
 		}
 		app.http.server.configuration.hostname = Self.sni
-		print(self.sni)
+		Debug.shared.log(message: self.sni)
 		app.http.server.configuration.tcpNoDelay = true
 
 		app.http.server.configuration.address = .hostname("0.0.0.0", port: port)

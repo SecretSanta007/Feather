@@ -7,57 +7,39 @@
 
 import Foundation
 
-func downloadCertificatesOnline(from urlStrings: [String], completion: @escaping (Result<[URL], Error>) -> Void) {
-	var downloadedURLs: [URL] = []
+func getCertificates() {
+	let sourceGET = SourceGET()
 	let dispatchGroup = DispatchGroup()
-
-	for urlString in urlStrings {
-		guard let url = URL(string: urlString) else {
-			Debug.shared.log(message: "Invalid URL: \(urlString).")
-			completion(.failure(NSError(domain: "Invalid URL", code: -1, userInfo: nil)))
-			return
-		}
-
-		let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-		let destinationURL = documentsDirectory.appendingPathComponent(url.lastPathComponent)
-
-		dispatchGroup.enter()
-		Debug.shared.log(message: "Downloading file from \(url)")
-		let task = URLSession.shared.downloadTask(with: url) { tempLocalURL, response, error in
-			defer { dispatchGroup.leave() }
-
-			if let error = error {
-				completion(.failure(error))
-				return
-			}
-
-			guard let tempLocalURL = tempLocalURL else {
-				Debug.shared.log(message: "Failed to download file from \(urlString).")
-				completion(.failure(NSError(domain: "Download failed", code: -1, userInfo: nil)))
-				return
-			}
-
-			do {
-				if FileManager.default.fileExists(atPath: destinationURL.path) {
-					try FileManager.default.removeItem(at: destinationURL)
-				}
-
-				try FileManager.default.moveItem(at: tempLocalURL, to: destinationURL)
-				downloadedURLs.append(destinationURL)
-			} catch {
-				completion(.failure(error))
-				return
-			}
-		}
-
-		task.resume()
+	let uri = URL(string: "https://backloop.dev/pack.json")!
+	
+	func writeToFile(content: String, filename: String) throws {
+		let path = getDocumentsDirectory().appendingPathComponent(filename)
+		try content.write(to: path, atomically: true, encoding: .utf8)
 	}
-
-	dispatchGroup.notify(queue: .main) {
-		if downloadedURLs.count == urlStrings.count {
-			completion(.success(downloadedURLs))
-		} else {
-			completion(.failure(NSError(domain: "Some downloads failed", code: -1, userInfo: nil)))
+	
+	dispatchGroup.enter()
+	
+	defer {
+		dispatchGroup.leave()
+	}
+	
+	sourceGET.downloadURL(from: uri) { result in
+		switch result {
+		case .success(let (data, _)):
+			switch sourceGET.parseCert(data: data) {
+			case .success(let serverPack):
+				do {
+					try writeToFile(content: serverPack.key, filename: "server.pem")
+					try writeToFile(content: serverPack.cert, filename: "server.crt")
+					try writeToFile(content: serverPack.info.domains.commonName, filename: "commonName.txt")
+				} catch {
+					Debug.shared.log(message: "Error writing files: \(error.localizedDescription)")
+				}
+			case .failure(let error):
+				Debug.shared.log(message: "Error parsing certificate: \(error.localizedDescription)")
+			}
+		case .failure(let error):
+			Debug.shared.log(message: "Error fetching data from \(uri): \(error.localizedDescription)")
 		}
 	}
 }
